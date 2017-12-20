@@ -41,6 +41,12 @@ class Ball extends Component {
             this.xOut = this.xIn + dx;
             this.yOut = this.yIn + dy;
 
+              console.error(dx,dy);
+              if (Math.abs(dx) <= 5 && Math.abs(dy) <= 5) {
+                this.props.onClick();
+                return;
+            }
+
             const angle = Math.atan2(this.yOut - this.yIn, this.xOut - this.xIn) * 180 / Math.PI;
             this.props.onStart(angle + 90);
             // this.props.onStart(2);

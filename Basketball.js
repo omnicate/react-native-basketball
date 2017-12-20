@@ -5,6 +5,7 @@ import {
   StyleSheet,
   View,
   Dimensions,
+  Platform,
 } from 'react-native';
 
 import Ball from './components/Ball';
@@ -13,8 +14,19 @@ import Net from './components/Net';
 import Floor from './components/Floor';
 import Emoji from './components/Emoji';
 import Score from './components/Score';
+import {
+  RTCPeerConnection,
+  RTCMediaStream,
+  RTCIceCandidate,
+  RTCSessionDescription,
+  RTCView,
+  MediaStreamTrack,
+  getUserMedia,
+} from 'react-native-webrtc';
 
 import Vector from './utils/Vector';
+import ContactsWrapper from 'react-native-contacts-wrapper';
+import {setJSExceptionHandler, getJSExceptionHandler} from 'react-native-exception-handler';
 
 // physical variables
 const gravity = 0.6; // gravity
@@ -41,6 +53,168 @@ const LC_FALLING = 2;
 const LC_BOUNCING = 3;
 const LC_RESTARTING = 4;
 const LC_RESTARTING_FALLING = 5;
+const reporter = (error) => {
+  // Logic for reporting to devs
+  // Example : Log issues to github issues using github apis.
+  console.log(error); // sample
+};
+
+const errorHandler = (e, isFatal) => {
+  if (isFatal) {
+    reporter(e);
+  } else {
+    console.log(e); // So that we can see it in the ADB logs in case of Android if needed
+  }
+};
+
+setJSExceptionHandler(errorHandler, true);
+var CallFlow = require('./callflow');
+var Horizon = require("@horizon/client");
+var Dbref = require("./dbref");
+var jwtDecode = require('jwt-decode');
+var uuid = require('node-uuid');
+
+var horizon = Horizon({ authType: 'token', secure: true, host: 'phoneline.prod.loltel.co' });
+const authToken = "eyJhbGciOiJIUzUxMiJ9.eyJleHRlcm5hbCI6ZmFsc2UsIm1zaXNkbiI6IjQ2NzI0NDUyMDMwIiwiZXhwIjoxNTE0MTIwMDY1LCJ1c2VySWQiOiJiYmFjZTAyMi1mZTA4LTQzODQtOGZhMC1hN2IyMmM0ZmIyZjMifQ.68JHZzQ8ATgbJhXEj0wXu1-Di1B0qQIHsemM0_tQaSesH4iS_h4qy9Mek--eIhsBXNnX-NPsbYUHNxh8lYXOvg";
+horizon.utensils.tokenStorage.set(authToken);
+
+horizon.connect((err) => {
+    console.error('Received an error: ', err);
+});
+
+function logError(error) {
+  console.log("logError", error);
+}
+
+let localStream;
+
+function getLocalStream(isFront, callback) {
+
+  let videoSourceId;
+
+  // on android, you don't have to specify sourceId manually, just use facingMode
+  // uncomment it if you want to specify
+  if (Platform.OS === 'ioszz') {
+    MediaStreamTrack.getSources(sourceInfos => {
+      console.log("sourceInfos: ", sourceInfos);
+
+      for (const i = 0; i < sourceInfos.length; i++) {
+        const sourceInfo = sourceInfos[i];
+        if(sourceInfo.kind == "video" && sourceInfo.facing == (isFront ? "front" : "back")) {
+          videoSourceId = sourceInfo.id;
+        }
+      }
+    });
+  }
+    let videoConfig = false;
+    if (videoSourceId) {
+        videoConfig = {
+            mandatory: {
+                minWidth: 640, // Provide your own width, height and frame rate here
+                minHeight: 360,
+                minFrameRate: 30,
+            },
+            facingMode: (isFront ? "user" : "environment"),
+            optional: (videoSourceId ? [{sourceId: videoSourceId}] : []),
+        };
+    }
+  getUserMedia({
+    audio: true,
+    video: videoConfig
+  }, function (stream) {
+    console.log('getUserMedia success', stream);
+    callback(stream);
+  }, logError);
+}
+
+
+let hzAuthData;
+horizon.onReady(() =>
+                horizon.currentUser()
+                .fetch()
+                .subscribe((user) => {
+                    hzAuthData = jwtDecode(authToken);
+                    console.log('Got hz user: ' + user );
+                    getLocalStream(true, function(stream) {
+                        localStream = stream;
+                        container.setState({selfViewSrc: stream.toURL()});
+                        container.setState({status: 'ready', info: 'Please enter or create room ID'});
+                    });
+                    console.log('Have local stream:' + JSON.stringify(user));
+                }));
+var firebaseRef = new Dbref(horizon, '');
+var call;
+var LibPhoneNumber = require('google-libphonenumber');
+
+let util = LibPhoneNumber.PhoneNumberUtil.getInstance();
+let parseNumber = function(number, countrycode) {
+    return new Promise((resolve, reject) => {
+        var processed = {
+            isPossibleNumber: false,
+            regionCode: "NO",
+            nationalFormat: number,
+            nationalNumber: number,
+            internationalFormat: number,
+            internationalNumber: number,
+            E614: number
+        };
+        // Ignore phone number without any digits
+        if (!number || number.search(/\d/) == -1) {
+            return reject("Bad number");
+        }
+        try {
+            var phoneNumber = util.parse(number, countrycode);
+            if (!phoneNumber) {
+                return reject('Error Parsing '+number);
+            }
+            var e614 = util.format(phoneNumber, LibPhoneNumber.PhoneNumberFormat.E164);
+            processed = {
+                isPossibleNumber: util.isPossibleNumber(phoneNumber),
+                regionCode: util.getRegionCodeForNumber(phoneNumber),
+                nationalFormat: util.format(phoneNumber, LibPhoneNumber.PhoneNumberFormat.NATIONAL),
+                nationalNumber: util.getNationalSignificantNumber(phoneNumber),
+                internationalFormat: util.format(phoneNumber, LibPhoneNumber.PhoneNumberFormat.INTERNATIONAL),
+                internationalNumber: e614,
+                E614: e614
+            };
+            resolve(processed);
+        }
+        catch(err) {
+            reject('Error Parsing '+number+' '+err);
+            return;
+        }
+    });
+}
+
+function join(number, container) {
+    parseNumber(number, 'NO')
+        .then((parsed)=>makeCall(parsed.internationalNumber, container))
+        .catch((err)=>{ console.log(err);
+                        container.setState({status: 'ready', info: err});
+                      });
+}
+
+function makeCall(number, container) {
+    console.log('call', number);
+
+    var userid = hzAuthData.userId;
+    var msisdn = hzAuthData.msisdn;
+    var callRef = firebaseRef.child('call').push();
+    var callLogRef = firebaseRef.child('recentcalls/' + userid + '/' + callRef.key);
+    var config = {
+        firebaseRef: firebaseRef,
+        callRef: callRef,
+        callLogRef: callLogRef,
+        remoteMsisdn: number,
+        localMsisdn: msisdn,
+        localStream: localStream,
+        terminalId: uuid.v4()
+    };
+    call = new CallFlow(config);
+    call.on('stateChange', (obj, state)=> { if (state) container.setPhoneState(state) } );
+    call.makeCall();
+}
+
 
 class Basketball extends Component {
 
@@ -60,6 +234,7 @@ class Basketball extends Component {
       lifecycle: LC_WAITING,
       scored: null,
       score: 0,
+      phone: 'idle'
     };
   }
 
@@ -81,6 +256,38 @@ class Basketball extends Component {
         lifecycle: LC_STARTING,
       });
     }
+  }
+    
+    onClick() {
+        if (this.state.phone != 'idle' && this.state.phone != 'ended') {
+            this.endCall();
+            return;
+        }
+        this.callContact();
+    }
+    
+    endCall(event) {
+        if (call) {
+            call.endCall();
+        }
+        this.setPhoneState('idle');
+        
+    }
+
+  callContact() {
+        ContactsWrapper.getContact()
+        .then((contact) => {
+            // Replace this code
+            console.log(contact);
+            // this.setState(contact.phone);
+            this.setPhoneState('incall');
+            join(contact.phone, this);
+        })
+        .catch((error) => {
+            console.log("ERROR CODE: ", error.code);
+            console.log("ERROR MESSAGE: ", error.message);
+            this.endCall();
+        });
   }
 
   randomIntFromInterval(min, max) {
@@ -286,6 +493,13 @@ class Basketball extends Component {
     }
   }
 
+    setPhoneState(s) {
+        nextState = Object.assign({}, this.state);
+        nextState.phone = s;
+        console.log('changed state to', s);
+        this.setState(nextState);
+    }
+    
   update() {
     if (this.state.lifecycle === LC_WAITING) return;
 
@@ -327,12 +541,13 @@ class Basketball extends Component {
   render() {
     return (
       <View style={styles.container}>
-        <Score y={FLOOR_HEIGHT * 3} score={this.state.score} scored={this.state.scored} />
+        <Score y={FLOOR_HEIGHT * 3} score={this.state.score} scored={this.state.scored} phone={this.state.phone} />
         <Hoop y={HOOP_Y} />
         {this.renderNet(this.state.lifecycle === LC_STARTING)}
         {this.renderFloor(this.state.vy <= 0)}
         <Ball
           onStart={this.onStart.bind(this)}
+          onClick={this.onClick.bind(this)}
           x={this.state.x}
           y={this.state.y}
           radius={radius}

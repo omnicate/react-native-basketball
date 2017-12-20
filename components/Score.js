@@ -28,6 +28,15 @@ class Score extends Component {
         >
           {this.props.score}
         </Text>
+        <Text style={[{
+          flex: 1,
+          fontSize: 13,
+          fontWeight: '100',
+          color: '#707070',
+        }]}
+        >
+            phone: {this.props.phone}
+        </Text>
       </View>
     );
   }
